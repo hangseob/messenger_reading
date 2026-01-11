@@ -1,0 +1,19 @@
+{
+  "kakao": {
+    "process_name": "KakaoTalk.exe",
+    "window_title": "카카오톡",
+    "monitoring_interval": 0.1,
+    "output_delay": 0.0
+  },
+  "output": {
+    "directory": "output",
+    "filename_format": "kakao_messages_{timestamp}.txt",
+    "append_mode": true,
+    "encoding": "utf-8"
+  },
+  "performance": {
+    "use_async": true,
+    "buffer_size": 100,
+    "max_response_time": 0.5
+  }
+}
