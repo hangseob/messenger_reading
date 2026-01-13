@@ -76,9 +76,7 @@ class KBondMonitor:
             # or process all of it. Let's process all for now.
             print(f"INFO: Monitoring new window: {title}")
 
-        lines = best_text.split('\r\n')
-        if len(lines) == 1:
-            lines = best_text.split('\n')
+        lines = best_text.splitlines()
             
         new_messages = []
         for line in lines:
