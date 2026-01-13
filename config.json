@@ -5,6 +5,9 @@
     "monitoring_interval": 0.1,
     "output_delay": 0.0
   },
+  "kbond": {
+    "monitoring_interval": 0.5
+  },
   "output": {
     "directory": "output",
     "filename_format": "kakao_messages_{timestamp}.txt",
