@@ -1,3 +1,22 @@
+"""
+KBond Custom Right-Click Menu - Tkinter 버전
+
+⚠️ 알려진 문제점 (2026-01-30):
+1. Tcl_AsyncDelete 에러: "async handler deleted by the wrong thread"
+   - 원인: Tkinter는 메인 스레드에서만 실행 가능한데, 현재 별도 스레드에서 호출됨
+   - 증상: 여러 번 우클릭 후 Python 프로그램 crash
+   
+2. Native 메뉴 겹침 문제:
+   - KBond의 기본 우클릭 메뉴가 커스텀 메뉴 아래에 겹쳐서 표시됨
+   - close_popup_menus()가 완전히 동작하지 않음
+   
+3. 스레드 안전성 부족:
+   - root.mainloop()이 별도 스레드에서 실행되어 불안정
+   - 메뉴 종료 시 리소스 정리가 완전하지 않을 수 있음
+
+→ 해결책: Win32 TrackPopupMenu API로 전환 필요
+"""
+
 import tkinter as tk
 import pyperclip
 import win32gui
