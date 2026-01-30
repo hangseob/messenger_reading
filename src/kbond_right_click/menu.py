@@ -1,25 +1,17 @@
 """
-KBond Custom Right-Click Menu - Win32 TrackPopupMenu 버전
+KBond Custom Right-Click Menu - Tkinter 버전 (메인 스레드 실행)
 
-이전 Tkinter 버전의 문제점:
-1. Tcl_AsyncDelete 에러: "async handler deleted by the wrong thread"
-2. Native 메뉴 겹침 문제
-3. 스레드 안전성 부족
-
-Win32 TrackPopupMenu 버전의 장점:
-- 스레드 안전 (어느 스레드에서든 호출 가능)
-- 네이티브 Windows 메뉴 (KBond와 같은 방식)
-- 자동으로 포커스 잃으면 닫힘
+메인 스레드에서 실행되므로:
+- Tcl_AsyncDelete 에러 없음
+- 스레드 안전
+- 더미 창이나 다른 창 참조 필요 없음
 """
 
+import tkinter as tk
+import pyperclip
 import win32gui
 import win32con
-import win32api
-import pyperclip
-import ctypes
 import time
-
-user32 = ctypes.windll.user32
 
 def ts():
     """밀리초 타임스탬프 반환"""
@@ -33,7 +25,6 @@ def close_popup_menus():
         try:
             cls = win32gui.GetClassName(hwnd)
             if cls == "#32768":
-                # WM_CLOSE: 메뉴를 직접 닫음
                 win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
                 closed_count += 1
         except:
@@ -48,68 +39,100 @@ def close_popup_menus():
         print(f"[{ts()}] close_popup_menus: closed {closed_count} popup(s)")
     return closed_count
 
-# 메뉴 아이템 ID
-MENU_COPY_SENTENCE = 1
-MENU_COPY_ALL = 2
-MENU_CLOSE = 3
-
-def show_custom_menu(x, y, sentence_text, all_text):
+def show_tkinter_menu(x, y, sentence_text, all_text):
     """
-    Win32 TrackPopupMenu를 사용하여 네이티브 팝업 메뉴를 표시합니다.
+    Tkinter를 사용하여 팝업 메뉴를 표시합니다.
+    ⚠️ 반드시 메인 스레드에서 호출해야 합니다!
     """
-    print(f"[{ts()}] show_custom_menu called. pos=({x}, {y})")
+    print(f"[{ts()}] show_tkinter_menu called. pos=({x}, {y})")
     print(f"[{ts()}] sentence_len={len(sentence_text) if sentence_text else 0}, all_text_len={len(all_text) if all_text else 0}")
     
     # KBond의 기본 메뉴를 닫음
     close_popup_menus()
-    time.sleep(0.1)  # 메뉴가 완전히 닫히도록 대기
+    time.sleep(0.05)
     
+    root = None
+    menu_closed = [False]
+    
+    def close_menu(event=None):
+        if menu_closed[0]:
+            return
+        menu_closed[0] = True
+        print(f"[{ts()}] Closing menu...")
+        if root:
+            try:
+                root.quit()
+                root.destroy()
+            except:
+                pass
+
+    def copy_sentence():
+        print(f"[{ts()}] copy_sentence called.")
+        if sentence_text:
+            pyperclip.copy(sentence_text)
+            print(f"[{ts()}] Copied sentence: {sentence_text[:50]}...")
+        else:
+            print(f"[{ts()}] WARN: No sentence to copy.")
+        close_menu()
+
+    def copy_all():
+        print(f"[{ts()}] copy_all called.")
+        if all_text:
+            pyperclip.copy(all_text)
+            print(f"[{ts()}] Copied all text ({len(all_text)} chars).")
+        else:
+            print(f"[{ts()}] WARN: No text to copy.")
+        close_menu()
+
     try:
-        # 팝업 메뉴 생성
-        menu = win32gui.CreatePopupMenu()
+        print(f"[{ts()}] Creating Tkinter menu...")
+        root = tk.Tk()
+        root.withdraw()
+        root.overrideredirect(True)
+        root.attributes('-topmost', True)
         
-        # 메뉴 아이템 추가
-        win32gui.InsertMenu(menu, 0, win32con.MF_BYPOSITION | win32con.MF_STRING, 
-                           MENU_COPY_SENTENCE, "문장복사")
-        win32gui.InsertMenu(menu, 1, win32con.MF_BYPOSITION | win32con.MF_STRING, 
-                           MENU_COPY_ALL, "모두복사")
-        win32gui.InsertMenu(menu, 2, win32con.MF_BYPOSITION | win32con.MF_SEPARATOR, 0, "")
-        win32gui.InsertMenu(menu, 3, win32con.MF_BYPOSITION | win32con.MF_STRING, 
-                           MENU_CLOSE, "닫기")
+        # 작은 투명 윈도우를 만들어 포커스를 받을 수 있게 함
+        root.geometry(f"1x1+{x}+{y}")
+        root.deiconify()
+        root.focus_force()
+
+        menu = tk.Menu(root, tearoff=0)
+        menu.add_command(label="문장복사", command=copy_sentence)
+        menu.add_command(label="모두복사", command=copy_all)
+        menu.add_separator()
+        menu.add_command(label="닫기", command=close_menu)
         
-        print(f"[{ts()}] Win32 menu created")
+        # 메뉴 외부 클릭 시 닫기
+        root.bind("<Button-1>", close_menu)
+        root.bind("<Button-3>", close_menu)
+        root.bind("<Escape>", close_menu)
         
-        # TPM_RETURNCMD: 선택된 메뉴 ID 반환 (WM_COMMAND 대신)
-        # TPM_NONOTIFY: 알림 메시지 보내지 않음
-        cmd = user32.TrackPopupMenu(
-            menu,
-            win32con.TPM_RETURNCMD | win32con.TPM_NONOTIFY | win32con.TPM_LEFTBUTTON,
-            x, y, 0, 
-            win32gui.GetDesktopWindow(),  # 데스크탑 창을 소유자로 사용
-            None
-        )
+        print(f"[{ts()}] Posting menu at ({x}, {y})...")
+        menu.post(x, y)
         
-        print(f"[{ts()}] Menu selection: {cmd}")
+        # 메뉴가 사라지면 종료하도록 폴링
+        def check_menu():
+            if menu_closed[0]:
+                return
+            try:
+                if not menu or not menu.winfo_exists():
+                    print(f"[{ts()}] Menu no longer exists, closing...")
+                    close_menu()
+                else:
+                    root.after(100, check_menu)
+            except:
+                close_menu()
         
-        # 메뉴 선택 처리
-        if cmd == MENU_COPY_SENTENCE:
-            if sentence_text:
-                pyperclip.copy(sentence_text)
-                print(f"[{ts()}] Copied sentence: {sentence_text[:50]}...")
-            else:
-                print(f"[{ts()}] WARN: No sentence to copy")
-        elif cmd == MENU_COPY_ALL:
-            if all_text:
-                pyperclip.copy(all_text)
-                print(f"[{ts()}] Copied all text ({len(all_text)} chars)")
-            else:
-                print(f"[{ts()}] WARN: No text to copy")
-        elif cmd == MENU_CLOSE or cmd == 0:
-            print(f"[{ts()}] Menu closed (cmd={cmd})")
+        root.after(100, check_menu)
         
-        # 메뉴 정리
-        win32gui.DestroyMenu(menu)
-        print(f"[{ts()}] Menu destroyed, done.")
+        print(f"[{ts()}] Entering Tkinter mainloop...")
+        root.mainloop()
+        print(f"[{ts()}] Tkinter mainloop exited.")
         
     except Exception as e:
-        print(f"[{ts()}] ERROR in show_custom_menu: {e}")
+        print(f"[{ts()}] ERROR in show_tkinter_menu: {e}")
+        if root:
+            try:
+                root.destroy()
+            except:
+                pass

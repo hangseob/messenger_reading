@@ -4,9 +4,8 @@ from .hook import start_hook, stop_hook
 
 def run():
     print("="*50)
-    print("KBond Custom Right-Click Tool")
+    print("KBond Custom Right-Click Tool (Win32 TrackPopupMenu)")
     print("Features: '문장복사', '모두복사'")
-    print("Method: Queue + Main Thread Tkinter")
     print("Requirement: Run as Administrator")
     print("Press Ctrl+C to stop")
     print("="*50)

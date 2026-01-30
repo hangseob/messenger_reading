@@ -1,14 +1,6 @@
 """
-KBond Custom Right-Click Hook - Queue + 메인 스레드 Tkinter 방식
-
-구조:
-- 별도 스레드: 데이터 수집 (prefetch)
-- 메인 스레드: 메시지 펌프 + Queue 체크 + Tkinter 메뉴 표시
-
-이 방식의 장점:
-- Tkinter가 메인 스레드에서 실행됨 → Tcl_AsyncDelete 에러 없음
-- 더미 창이나 다른 창 참조 필요 없음
-- 정석적인 Windows 메시지 루프 유지
+Win32 TrackPopupMenu 버전 - 별도 스레드에서 메뉴 표시 시도
+⚠️ 알려진 문제: TrackPopupMenu가 별도 스레드에서 호출되면 즉시 0 반환
 """
 import win32gui
 import win32con
@@ -17,13 +9,12 @@ import ctypes
 from ctypes import wintypes
 import threading
 import time
-import queue
 from .utils import (
     get_window_at_pos, is_kbond_chat_history, is_text_selected, 
     get_all_text, extract_sentence_from_text, log_window_status, get_window_info,
     get_room_name
 )
-from .menu import show_tkinter_menu
+from .menu import show_custom_menu
 
 def ts():
     """밀리초 타임스탬프 반환"""
@@ -44,9 +35,6 @@ hook_id = None
 _hook_ptr = None
 is_shutting_down = False
 
-# 메인 스레드로 메뉴 표시 요청을 전달하는 Queue
-menu_queue = queue.Queue()
-
 # 마지막으로 접근한 KBond 창 정보 (crash 추적용)
 last_kbond_hwnd = None
 last_kbond_room = ""
@@ -64,9 +52,6 @@ pending_data = {
 
 # 안전장치: 작업 타임아웃 (초)
 OPERATION_TIMEOUT = 3.0
-
-# PeekMessage 상수
-PM_REMOVE = 0x0001
 
 HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
@@ -87,6 +72,7 @@ def clear_pending_data():
         'sentence': '',
         'all_text': ''
     })
+    print(f"[{ts()}] Global data RESET")
 
 def check_last_window_health():
     """마지막으로 접근한 KBond 창의 상태를 확인합니다."""
@@ -131,29 +117,38 @@ def run_with_timeout(func, args=(), timeout=OPERATION_TIMEOUT):
     
     return result[0]
 
-def queue_menu_request():
-    """저장된 데이터를 Queue에 넣어 메인 스레드에서 메뉴를 표시하도록 요청합니다."""
-    global pending_data
-    time.sleep(0.15)  # KBond 메뉴가 완전히 뜰 때까지 대기
+def show_menu_with_data():
+    """저장된 데이터로 메뉴를 표시합니다."""
+    global pending_data, last_kbond_hwnd, last_kbond_room
+    time.sleep(0.15)  # 약간의 딜레이
     
-    print(f"[{ts()}] queue_menu_request: is_kbond={pending_data['is_kbond']}, room=\"{pending_data['room_name']}\"")
+    print(f"[{ts()}] show_menu_with_data: is_kbond={pending_data['is_kbond']}, room=\"{pending_data['room_name']}\"")
+    
+    # 메뉴 표시 전 마지막 창 상태 확인
+    check_last_window_health()
     
     if pending_data['is_kbond']:
-        # 데이터를 복사해서 Queue에 넣음
-        data = {
-            'x': pending_data['x'],
-            'y': pending_data['y'],
-            'sentence': pending_data['sentence'],
-            'all_text': pending_data['all_text'],
-            'room': pending_data['room_name']
-        }
-        menu_queue.put(data)
-        print(f"[{ts()}] Menu request queued for room \"{data['room']}\"")
+        # 1. 데이터를 로컬 변수로 복사
+        x, y = pending_data['x'], pending_data['y']
+        sentence = pending_data['sentence']
+        all_text = pending_data['all_text']
+        room = pending_data['room_name']
         
-        # 글로벌 데이터 초기화
+        print(f"[{ts()}] Data for menu: room=\"{room}\", sentence_len={len(sentence)}, all_text_len={len(all_text)}")
+        
+        # 2. 메뉴 표시 전 글로벌 데이터 비우기 (중요!)
         clear_pending_data()
+        
+        # 3. 메뉴 호출 (hwnd 없이 - 메뉴는 KBond와 직접 통신하지 않음)
+        print(f"[{ts()}] Calling show_custom_menu for room \"{room}\"...")
+        show_custom_menu(x, y, sentence, all_text)
+        print(f"[{ts()}] show_custom_menu returned.")
+        
+        # 4. 메뉴 종료 후 마지막 창 상태 다시 확인
+        check_last_window_health()
+        
     else:
-        print(f"[{ts()}] Not a KBond target, skipping.")
+        print(f"[{ts()}] Not a KBond target, clearing data...")
         clear_pending_data()
 
 def prefetch_data(hwnd, x, y):
@@ -258,8 +253,7 @@ def mouse_handler(nCode, wParam, lParam):
             threading.Thread(target=lambda: prepare_and_fetch(data.pt.x, data.pt.y), daemon=True).start()
         elif wParam == win32con.WM_RBUTTONUP:
             print(f"[{ts()}] ========== RIGHT-CLICK UP ==========")
-            # 메뉴 표시 요청을 Queue에 넣음 (별도 스레드에서)
-            threading.Thread(target=queue_menu_request, daemon=True).start()
+            threading.Thread(target=show_menu_with_data, daemon=True).start()
     except:
         pass
     
@@ -277,35 +271,15 @@ def start_hook():
 
     print("Mouse hook installed. Monitoring KBond right-clicks...")
     print(f"[INFO] Safety: All operations timeout after {OPERATION_TIMEOUT}s")
-    print(f"[INFO] Menu runs on MAIN THREAD (Queue-based)")
-    print(f"[INFO] No dummy windows, no external window references")
+    print(f"[INFO] KBond interaction: WM_GETTEXT only (no EM_* calls)")
+    print(f"[INFO] Menu does NOT hold KBond hwnd reference")
+    print(f"[INFO] Crash detection: IsHungAppWindow monitoring enabled")
     
     msg = wintypes.MSG()
     try:
-        while not is_shutting_down:
-            # Non-blocking 메시지 펌프 (PeekMessage)
-            while user32.PeekMessageW(ctypes.byref(msg), 0, 0, 0, PM_REMOVE):
-                if msg.message == win32con.WM_QUIT:
-                    is_shutting_down = True
-                    break
-                user32.TranslateMessage(ctypes.byref(msg))
-                user32.DispatchMessageW(ctypes.byref(msg))
-            
-            # Queue 체크 - 메인 스레드에서 Tkinter 메뉴 표시
-            try:
-                data = menu_queue.get_nowait()
-                if data:
-                    print(f"[{ts()}] Processing menu request for room \"{data['room']}\"...")
-                    check_last_window_health()
-                    show_tkinter_menu(data['x'], data['y'], data['sentence'], data['all_text'])
-                    check_last_window_health()
-                    print(f"[{ts()}] Menu closed.")
-            except queue.Empty:
-                pass
-            
-            # CPU 사용량 줄이기
-            time.sleep(0.01)
-            
+        while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) != 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
     except (KeyboardInterrupt, SystemExit):
         is_shutting_down = True
     finally:
